@@ -1,18 +1,20 @@
 #!/usr/bin/env ruby
 
-#
 # appstore_reviews
 #
-#  Fetch iTunes App Store reviews for each application, across all country stores, with translation
-#   -- reads rating, author, subject and review body
+#  Fetches iTunes App Store reviews for each application
+#   -- across all country stores, translates body to specified language
+#   -- reviews with rating, author, subject and review body
+#   -- ratings from 1 to 5 stars
 #
-# Notes
-#  Derived from Erica Sadun's scraper: http://blogs.oreilly.com/iphone/2008/08/scraping-appstore-reviews.html
-#  Apple's XML is purely layout-based, without much semantic relation to reviews, so the CSS paths below
-#   are brittle.
+#  Notes
+#   Derived from Erica Sadun's scraper: http://blogs.oreilly.com/iphone/2008/08/scraping-appstore-reviews.html
+#   Apple's XML is purely layout-based, without much semantic relation to reviews, so the CSS paths are brittle.
 #
-# Jeremy Wohl
+#  Ruby Script by Jeremy Wohl
 #   relevant post: http://igmus.org/2008/09/fetching-app-store-reviews
+#
+#  Rating added by Thomas Dohmke
 #
 # TODO: spider additional review pages
 #
@@ -116,12 +118,13 @@ DEBUG = false
 
 TRANSLATE_URL = "http://translate.google.com/translate_t"
 
+# Translate to native language
 def translate(opts)
   result = WWW::Mechanize.new.post(TRANSLATE_URL, :sl => opts[:from], :tl => opts[:to], :ie => 'UTF-8', :text => opts[:text])
   result.search('#result_box').inner_html
 end
 
-# return a rating/subject/author/body hash
+# Return a rating/subject/author/body hash and stars array
 def fetch_reviews(software_id, store)
   reviews = []
   
@@ -140,48 +143,63 @@ def fetch_reviews(software_id, store)
   
   doc = Hpricot.XML(rawxml)
 
+  star_count = 5
+  stars = []
+  doc.search("Test > VBoxView > MatrixView > VBoxView > TextView > SetFontStyle").each do |e|
+    stars[star_count] = e.inner_html.to_i.to_s
+    star_count -= 1
+  end
+
   doc.search("Document > View > ScrollView > VBoxView > View > MatrixView > VBoxView:nth(0) > VBoxView > VBoxView").each do |e|
     review = {}
     
     strings = (e/:SetFontStyle)
-    meta    = strings[2].inner_text.split(/\n/).map { |x| x.strip }
+    meta = strings[2].inner_text.split(/\n/).map { |x| x.strip }
 
     # Note: Translate is sensitive to spaces around punctuation, so we make sure br's connote space.
-    review[:rating]  = e.inner_html.match(/alt="(\d+) star(s?)"/)[1].to_i
-    review[:author]  = meta[3]
+    review[:rating] = e.inner_html.match(/alt="(\d+) star(s?)"/)[1].to_i
+    review[:author] = meta[3]
     review[:version] = meta[7][/Version (.*)/, 1]
-    review[:date]    = meta[10]
+    review[:date] = meta[10]
     review[:subject] = strings[0].inner_text.strip
-    review[:body]    = strings[3].inner_html.gsub("<br />", "\n").strip
+    review[:body] = strings[3].inner_html.gsub("<br />", "\n").strip
     
-    if ! store[:language].empty? && store[:language] != NATIVE_LANGUAGE
-      review[:subject] = translate( :from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:subject] )
-      review[:body]    = translate( :from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:body] )
+    if !store[:language].empty? && store[:language] != NATIVE_LANGUAGE
+      review[:subject] = translate(:from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:subject])
+      review[:original_body] = review[:body]
+      review[:body] = translate(:from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:body])
       review[:body].gsub!("<br />", "\n")  # br's reintroduced by Translate
     end
     
     reviews << review
   end
 
-  reviews
+  return reviews, stars
 end
 
-# a simple command-line presentation
+# Output reviews and stars to stdout
 software.keys.sort.each do |software_key|
   puts "== App: #{software_key}"
 
-  stores.sort_by { |a| a[:name] }.each do |store|
-    reviews = fetch_reviews(software[software_key], store)
+  stores.each do |store|
+    puts "=== Store: #{store[:name]}"
+    reviews, stars = fetch_reviews(software[software_key], store)
 
     if reviews.any?
-      puts "=== Store: #{store[:name]}"
-      
       reviews.each_with_index do |review, index|
         puts sprintf(%{%s %s, "%s", by %s, for version %s, on %s},
           review[:rating], review[:rating] > 1 ? "stars" : "star", review[:subject],
           review[:author], review[:version], review[:date])
         puts review[:body]
+        puts "(Original: #{review[:original_body]})" if !review[:original_body].nil?
         puts "--\n" if index + 1 < reviews.size
+      end
+    end
+    
+    unless stars.empty?
+      puts "--\n" if reviews.any?
+      stars.each_with_index do |value, index|
+        puts value.to_s + "x " + Array.new(index).map{"*"}.join if index > 0
       end
     end
   end
