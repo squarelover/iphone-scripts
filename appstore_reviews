@@ -15,22 +15,18 @@
 #   relevant post: http://igmus.org/2008/09/fetching-app-store-reviews
 #
 #  Rating added by Thomas Dohmke
+#  YAML configuration added by Dennis Blöte
 #
 # TODO: spider additional review pages
 #
 
+require 'yaml'
 require 'rubygems'
 require 'hpricot'
 require 'mechanize'
 
-# MODIFY YOUR NATIVE LANGUAGE
-NATIVE_LANGUAGE = 'en'
-
-# MODIFY THIS HASH WITH YOUR APP SET (grab the itunes store urls & pull the id params)
-software = {
-  # http://phobos.apple.com/WebObjects/MZStore.woa/wa/viewSoftware?id=289923007&mt=8
-  'Domain Scout' => 289923007,
-}
+# Load config
+CONFIG = YAML.load_file('config.yml')
 
 stores = [
   { :name => 'United States',        :id => 143441, :language => 'en'    },
@@ -114,8 +110,6 @@ stores = [
   { :name => 'Uruguay',              :id => 143514, :language => 'es'    },
 ]
 
-DEBUG = false
-
 TRANSLATE_URL = "http://translate.google.com/translate_t"
 
 # Translate to native language
@@ -125,7 +119,7 @@ def translate(opts)
 end
 
 # Return a rating/subject/author/body hash and stars array
-def fetch_reviews(software_id, store)
+def fetch_reviews(app_id, store)
   reviews = []
   
   # TODO: parameterize type=Purple+Software
@@ -133,12 +127,12 @@ def fetch_reviews(software_id, store)
                 %{'http://ax.phobos.apple.com.edgesuite.net/WebObjects/MZStore.woa/wa/viewContentsUserReviews?id=%s&} <<
                 %{pageNumber=0&sortOrdering=2&type=Purple+Software' | xmllint --format --recover - 2>/dev/null},
                 store[:id],
-                software_id)
+                app_id)
 
   rawxml = `#{cmd}`
   
-  if defined?(DEBUG) && DEBUG == true
-    open("appreview.#{software_id}.#{store[:id]}.xml", 'w') { |f| f.write(rawxml) }
+  if defined?(CONFIG['debug']) && CONFIG['debug'] == true
+    open("appreview.#{app_id}.#{store[:id]}.xml", 'w') { |f| f.write(rawxml) }
   end
   
   doc = Hpricot.XML(rawxml)
@@ -149,10 +143,9 @@ def fetch_reviews(software_id, store)
     stars[star_count] = e.inner_html.to_i.to_s
     star_count -= 1
   end
-
+  
   doc.search("Document > View > ScrollView > VBoxView > View > MatrixView > VBoxView:nth(0) > VBoxView > VBoxView").each do |e|
     review = {}
-    
     strings = (e/:SetFontStyle)
     meta = strings[2].inner_text.split(/\n/).map { |x| x.strip }
 
@@ -164,10 +157,10 @@ def fetch_reviews(software_id, store)
     review[:subject] = strings[0].inner_text.strip
     review[:body] = strings[3].inner_html.gsub("<br />", "\n").strip
     
-    if !store[:language].empty? && store[:language] != NATIVE_LANGUAGE
-      review[:subject] = translate(:from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:subject])
+    if !store[:language].empty? && store[:language] != CONFIG['native_language']
+      review[:subject] = translate(:from => store[:language], :to => CONFIG['native_language'], :text => review[:subject])
       review[:original_body] = review[:body]
-      review[:body] = translate(:from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:body])
+      review[:body] = translate(:from => store[:language], :to => CONFIG['native_language'], :text => review[:body])
       review[:body].gsub!("<br />", "\n")  # br's reintroduced by Translate
     end
     
@@ -178,12 +171,12 @@ def fetch_reviews(software_id, store)
 end
 
 # Output reviews and stars to stdout
-software.keys.sort.each do |software_key|
-  puts "== App: #{software_key}"
+CONFIG['apps'].each_pair do |app_name, app_id|
+  puts "== App: #{app_name}"
 
   stores.each do |store|
     puts "=== Store: #{store[:name]}"
-    reviews, stars = fetch_reviews(software[software_key], store)
+    reviews, stars = fetch_reviews(app_id, store)
 
     if reviews.any?
       reviews.each_with_index do |review, index|
