@@ -1,4 +1,5 @@
 native_language: en
+translate: false
 debug: false
 apps:
   iOctocat: 310429782
