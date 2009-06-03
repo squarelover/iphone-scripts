@@ -172,33 +172,35 @@ output = '<html><head><meta http-equiv="Content-Type" content="text/html; charse
 
 # Output reviews and stars to stdout
 CONFIG['apps'].each_pair do |app_name, app_id|
-  output += "<h2>#{app_name}</h2>"
+  puts "Fetching reviews for #{app_name}."
+  output << "<h2>#{app_name}</h2>"
 
   stores.each do |store|
+    puts "Store: #{store[:name]}"
     reviews, stars = fetch_reviews(app_id, store)
     
     if reviews.any?
-      output += "<h3>#{store[:name]}</h3>"
+      output << "<h3>#{store[:name]}</h3>"
       reviews.each_with_index do |review, index|
-        output += "<h4>#{sprintf(%{%s %s, "%s", by %s, for version %s, on %s},
+        output << "<h4>#{sprintf(%{%s %s, "%s", by %s, for version %s, on %s},
           review[:rating], review[:rating] > 1 ? "stars" : "star", review[:subject],
           review[:author], review[:version], review[:date])}</h4>"
-        output += "<p>#{review[:body]}</p>"
-        output += "<p>(Original: #{review[:original_body]})</p>" if !review[:original_body].nil?
+        output << "<p>#{review[:body]}</p>"
+        output << "<p>(Original: #{review[:original_body]})</p>" if !review[:original_body].nil?
       end
     end
     
     unless stars.empty?
-      output += "------" if reviews.any?
+      output << "<h4>Ratings</h4>" if reviews.any?
       stars.each_with_index do |value, index|
-        output += value.to_s + "x " + Array.new(index).map{"*"}.join if index > 0
+        output << value.to_s + "x " + Array.new(index).map{"*"}.join + "<br />" if index > 0
       end
     end
   end
   
-  output += '<hr />'
+  output << '<hr />'
 end
 
-output += '</body></html>'
+output << '</body></html>'
 
 File.open("appstore_reviews.html", 'w') { |f| f.write(output) }
