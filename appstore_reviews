@@ -203,4 +203,12 @@ end
 
 output << '</body></html>'
 
-File.open("appstore_reviews.html", 'w') { |f| f.write(output) }
+output_file = "appstore_reviews.html"
+File.open(output_file, 'w') { |f| f.write(output) }
+
+platform = RUBY_PLATFORM
+if platform =~ /cygwin/ || platform =~ /win32/
+  `rundll32 url.dll,FileProtocolHandler #{output_file}`
+elsif platform =~ /darwin/
+  `open #{output_file}`
+end
