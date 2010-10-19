@@ -1,34 +1,32 @@
 #!/usr/bin/env ruby
 
-#
 # appstore_reviews
 #
-#  Fetch iTunes App Store reviews for each application, across all country stores, with translation
-#   -- reads rating, author, subject and review body
+#  Fetches iTunes App Store reviews for each application
+#   -- across all country stores, translates body to specified language
+#   -- reviews with rating, author, subject and review body
+#   -- ratings from 1 to 5 stars
 #
-# Notes
-#  Derived from Erica Sadun's scraper: http://blogs.oreilly.com/iphone/2008/08/scraping-appstore-reviews.html
-#  Apple's XML is purely layout-based, without much semantic relation to reviews, so the CSS paths below
-#   are brittle.
+#  Notes
+#   Derived from Erica Sadun's scraper: http://blogs.oreilly.com/iphone/2008/08/scraping-appstore-reviews.html
+#   Apple's XML is purely layout-based, without much semantic relation to reviews, so the CSS paths are brittle.
 #
-# Jeremy Wohl
+#  Ruby Script by Jeremy Wohl
 #   relevant post: http://igmus.org/2008/09/fetching-app-store-reviews
+#
+#  Rating added by Thomas Dohmke
+#  YAML configuration and HTML output added by Dennis Blöte
 #
 # TODO: spider additional review pages
 #
 
+require 'yaml'
 require 'rubygems'
 require 'hpricot'
 require 'mechanize'
 
-# MODIFY YOUR NATIVE LANGUAGE
-NATIVE_LANGUAGE = 'en'
-
-# MODIFY THIS HASH WITH YOUR APP SET (grab the itunes store urls & pull the id params)
-software = {
-  # http://phobos.apple.com/WebObjects/MZStore.woa/wa/viewSoftware?id=289923007&mt=8
-  'Domain Scout' => 289923007,
-}
+# Load config
+CONFIG = YAML.load_file('config.yml')
 
 stores = [
   { :name => 'United States',        :id => 143441, :language => 'en'    },
@@ -112,12 +110,9 @@ stores = [
   { :name => 'Uruguay',              :id => 143514, :language => 'es'    },
 ]
 
-DEBUG = false
-
-TRANSLATE_URL = "http://translate.google.com"
-
+# Translate to native language
 def translate(opts)
-  result = WWW::Mechanize.new.post(TRANSLATE_URL, :sl => opts[:from], :tl => opts[:to], :ie => 'UTF-8', :text => opts[:text])
+  result = WWW::Mechanize.new.post(CONFIG['translate_url'], :sl => opts[:from], :tl => opts[:to], :ie => 'UTF-8', :text => opts[:text])
 
   begin
     return result.search('input').to_a.select { |elem| elem['name'] == 'gtrans' }.first.attributes['value']
@@ -133,8 +128,8 @@ def translate(opts)
   end
 end
 
-# return a rating/subject/author/body hash
-def fetch_reviews(software_id, store)
+# Return a rating/subject/author/body hash and stars array
+def fetch_reviews(app_id, store)
   reviews = []
   
   # TODO: parameterize type=Purple+Software
@@ -142,21 +137,27 @@ def fetch_reviews(software_id, store)
                 %{'http://ax.phobos.apple.com.edgesuite.net/WebObjects/MZStore.woa/wa/viewContentsUserReviews?id=%s&} <<
                 %{pageNumber=0&sortOrdering=2&type=Purple+Software' | xmllint --format --recover - 2>/dev/null},
                 store[:id],
-                software_id)
+                app_id)
 
   rawxml = `#{cmd}`
   
-  if defined?(DEBUG) && DEBUG == true
-    open("appreview.#{software_id}.#{store[:id]}.xml", 'w') { |f| f.write(rawxml) }
+  if defined?(CONFIG['debug']) && CONFIG['debug'] == true
+    open("appreview.#{app_id}.#{store[:id]}.xml", 'w') { |f| f.write(rawxml) }
   end
   
   doc = Hpricot.XML(rawxml)
 
+  star_count = 5
+  stars = []
+  doc.search("Test > VBoxView > MatrixView > VBoxView > TextView > SetFontStyle").each do |e|
+    stars[star_count] = e.inner_html.to_i.to_s
+    star_count -= 1
+  end
+  
   doc.search("Document > View > ScrollView > VBoxView > View > MatrixView > VBoxView:nth(0) > VBoxView > VBoxView").each do |e|
     review = {}
-    
     strings = (e/:SetFontStyle)
-    meta    = strings[2].inner_text.split(/\n/).map { |x| x.strip }
+    meta = strings[2].inner_text.split(/\n/).map { |x| x.strip }
 
     # Note: Translate is sensitive to spaces around punctuation, so we make sure br's connote space.
     review[:rating]  = e.inner_html.match(/alt="(\d+) star(s?)"/)[1].to_i
@@ -164,37 +165,62 @@ def fetch_reviews(software_id, store)
     review[:version] = meta[7][/Version (.*)/, 1] unless meta[7].nil?
     review[:date]    = meta[10]
     review[:subject] = strings[0].inner_text.strip
-    review[:body]    = strings[3].inner_html.gsub("<br />", "\n").strip
+    review[:body] = strings[3].inner_html.gsub("<br />", "\n").strip
     
-    if ! store[:language].empty? && store[:language] != NATIVE_LANGUAGE
-      review[:subject] = translate( :from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:subject] )
-      review[:body]    = translate( :from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:body] )
-      review[:body].gsub!("<br>", "\n")  # br's reintroduced by Translate
+    if !store[:language].empty? && store[:language] != CONFIG['native_language'] && CONFIG['translate']
+      review[:subject] = translate(:from => store[:language], :to => CONFIG['native_language'], :text => review[:subject])
+      review[:original_body] = review[:body]
+      review[:body] = translate(:from => store[:language], :to => CONFIG['native_language'], :text => review[:body])
+      review[:body].gsub!("<br />", "\n")  # br's reintroduced by Translate
     end
     
     reviews << review
   end
 
-  reviews
+  return reviews, stars
 end
 
-# a simple command-line presentation
-software.keys.sort.each do |software_key|
-  puts "== App: #{software_key}"
+output = '<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8" /><title>App Store Reviews</title></head><body><h1>App Store Reviews</h1>'
 
-  stores.sort_by { |a| a[:name] }.each do |store|
-    reviews = fetch_reviews(software[software_key], store)
+# Output reviews and stars to stdout
+CONFIG['apps'].each_pair do |app_name, app_id|
+  puts "Fetching reviews for #{app_name}."
+  output << "<h2>#{app_name}</h2>"
 
+  stores.each do |store|
+    puts "Store: #{store[:name]}"
+    reviews, stars = fetch_reviews(app_id, store)
+    
     if reviews.any?
-      puts "=== Store: #{store[:name]}"
-      
+      output << "<h3>#{store[:name]}</h3>"
       reviews.each_with_index do |review, index|
-        puts sprintf(%{%s %s, "%s", by %s, for version %s, on %s},
+        output << "<h4>#{sprintf(%{%s %s, "%s", by %s, for version %s, on %s},
           review[:rating], review[:rating] > 1 ? "stars" : "star", review[:subject],
-          review[:author], review[:version], review[:date])
-        puts review[:body]
-        puts "--\n" if index + 1 < reviews.size
+          review[:author], review[:version], review[:date])}</h4>"
+        output << "<p>#{review[:body]}</p>"
+        output << "<p>(Original: #{review[:original_body]})</p>" if !review[:original_body].nil?
+      end
+    end
+    
+    unless stars.empty?
+      output << "<h4>Ratings</h4>" if reviews.any?
+      stars.each_with_index do |value, index|
+        output << value.to_s + "x " + Array.new(index).map{"*"}.join + "<br />" if index > 0
       end
     end
   end
+  
+  output << '<hr />'
+end
+
+output << '</body></html>'
+
+output_file = "appstore_reviews.html"
+File.open(output_file, 'w') { |f| f.write(output) }
+
+platform = RUBY_PLATFORM
+if platform =~ /cygwin/ || platform =~ /win32/
+  `rundll32 url.dll,FileProtocolHandler #{output_file}`
+elsif platform =~ /darwin/
+  `open #{output_file}`
 end
