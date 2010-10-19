@@ -113,6 +113,7 @@ stores = [
 # Translate to native language
 def translate(opts)
   result = WWW::Mechanize.new.post(CONFIG['translate_url'], :sl => opts[:from], :tl => opts[:to], :ie => 'UTF-8', :text => opts[:text])
+  result = Mechanize.new.post(CONFIG['translate_url'], :sl => opts[:from], :tl => opts[:to], :ie => 'UTF-8', :text => opts[:text])
 
   begin
     return result.search('input').to_a.select { |elem| elem['name'] == 'gtrans' }.first.attributes['value']
@@ -133,9 +134,9 @@ def fetch_reviews(app_id, store)
   reviews = []
   
   # TODO: parameterize type=Purple+Software
-  cmd = sprintf(%{curl -s -A "iTunes/4.2 (Macintosh; U; PPC Mac OS X 10.2" -H "X-Apple-Store-Front: %s-1" } <<
+  cmd = sprintf(%{curl -s -A "iTunes/9.2 (Macintosh; U; Mac OS X 10.6" -H "X-Apple-Store-Front: %s-1" } <<
                 %{'http://ax.phobos.apple.com.edgesuite.net/WebObjects/MZStore.woa/wa/viewContentsUserReviews?id=%s&} <<
-                %{pageNumber=0&sortOrdering=2&type=Purple+Software' | xmllint --format --recover - 2>/dev/null},
+                %{pageNumber=0&sortOrdering=4&type=Purple+Software' | xmllint --format --recover - 2>/dev/null},
                 store[:id],
                 app_id)
 
@@ -171,7 +172,7 @@ def fetch_reviews(app_id, store)
       review[:subject] = translate(:from => store[:language], :to => CONFIG['native_language'], :text => review[:subject])
       review[:original_body] = review[:body]
       review[:body] = translate(:from => store[:language], :to => CONFIG['native_language'], :text => review[:body])
-      review[:body].gsub!("<br />", "\n")  # br's reintroduced by Translate
+      review[:body].to_s.gsub!("<br>", "\n")  # br's reintroduced by Translate
     end
     
     reviews << review
